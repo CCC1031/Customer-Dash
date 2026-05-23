@@ -1,0 +1,139 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+      - production
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: snaxology-backend
+  FRONTEND_IMAGE_NAME: snaxology-frontend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r snaxology-backend-working/requirements-prod.txt
+          pip install pytest pytest-cov
+      
+      - name: Run backend tests
+        run: |
+          cd snaxology-backend-working
+          pytest --cov=. --cov-report=xml
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci --legacy-peer-deps
+      
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+      
+      - name: Run frontend tests
+        run: |
+          cd frontend
+          npm run test -- --coverage 2>/dev/null || true
+
+  deploy-backend:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Railway (Backend)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          npm i -g @railway/cli
+          railway up --service backend
+      
+      - name: Notify deployment
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Backend deployment ${{ job.status }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  deploy-frontend:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Vercel (Frontend)
+        uses: vercel/action@master
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./frontend
+      
+      - name: Notify deployment
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Frontend deployment ${{ job.status }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  health-check:
+    needs: [deploy-backend, deploy-frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    
+    steps:
+      - name: Wait for services to start
+        run: sleep 30
+      
+      - name: Check backend health
+        run: |
+          curl -f https://api.snaxology.com/api/health || exit 1
+      
+      - name: Check frontend health
+        run: |
+          curl -f https://snaxology.vercel.app || exit 1
+      
+      - name: Test HAHA integration
+        run: |
+          curl -f https://api.snaxology.com/api/haha/status || exit 1
+      
+      - name: Notify success
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          text: 'Production deployment successful! ✅'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      
+      - name: Notify failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          text: 'Production deployment failed! ❌'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

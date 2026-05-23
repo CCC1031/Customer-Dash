@@ -1,0 +1,170 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@400;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  @apply box-border;
+}
+
+html {
+  @apply scroll-smooth;
+}
+
+body {
+  @apply bg-snax-dark text-white font-sans;
+}
+
+/* Snaxology Red Theme */
+:root {
+  --color-primary: #E31E24;
+  --color-dark: #1a1a1a;
+  --color-light: #f5f5f5;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #2d3748;
+}
+
+/* Typography */
+h1 {
+  @apply text-4xl font-bold font-display;
+}
+
+h2 {
+  @apply text-3xl font-bold font-display;
+}
+
+h3 {
+  @apply text-2xl font-bold font-display;
+}
+
+h4 {
+  @apply text-xl font-bold;
+}
+
+/* Buttons */
+.btn {
+  @apply px-4 py-2 rounded-lg font-medium transition-all duration-200;
+}
+
+.btn-primary {
+  @apply btn bg-snax-red text-white hover:bg-red-700 active:scale-95;
+}
+
+.btn-secondary {
+  @apply btn bg-gray-700 text-white hover:bg-gray-600 active:scale-95;
+}
+
+.btn-outline {
+  @apply btn border-2 border-snax-red text-snax-red hover:bg-snax-red hover:text-white active:scale-95;
+}
+
+/* Cards */
+.card {
+  @apply bg-gray-800 rounded-lg p-6 shadow-lg;
+}
+
+.card-hover {
+  @apply card hover:shadow-xl transition-shadow duration-200;
+}
+
+/* Forms */
+.input {
+  @apply w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-snax-red focus:ring-1 focus:ring-snax-red transition-colors;
+}
+
+.input:disabled {
+  @apply bg-gray-800 cursor-not-allowed opacity-50;
+}
+
+.label {
+  @apply block text-sm font-medium text-gray-300 mb-2;
+}
+
+/* Status badges */
+.badge {
+  @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium;
+}
+
+.badge-success {
+  @apply badge bg-green-900 text-green-200;
+}
+
+.badge-warning {
+  @apply badge bg-yellow-900 text-yellow-200;
+}
+
+.badge-danger {
+  @apply badge bg-red-900 text-red-200;
+}
+
+.badge-info {
+  @apply badge bg-blue-900 text-blue-200;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.animate-slideInUp {
+  animation: slideInUp 0.3s ease-in-out;
+}
+
+/* Loading spinner */
+.spinner {
+  @apply inline-block animate-spin;
+}
+
+.spinner-border {
+  @apply w-6 h-6 border-2 border-gray-600 border-t-snax-red rounded-full;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-800;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-600 rounded-full hover:bg-gray-500;
+}
+
+/* Responsive utilities */
+@media (max-width: 768px) {
+  h1 {
+    @apply text-2xl;
+  }
+
+  h2 {
+    @apply text-xl;
+  }
+
+  h3 {
+    @apply text-lg;
+  }
+}
