@@ -48,7 +48,7 @@ const DashboardPage: React.FC = () => {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-4xl font-bold mb-2">Dashboard</h1>
+        <h1 className="text-2xl md:text-4xl font-bold mb-1 md:mb-2">Dashboard</h1>
         <p className="text-gray-400">Welcome back, {customer?.company_name}</p>
       </div>
 
@@ -61,18 +61,18 @@ const DashboardPage: React.FC = () => {
       )}
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         {/* Total Machines */}
         <div className="card-hover">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-400 text-sm">Total Machines</p>
-              <p className="text-3xl font-bold mt-2">{overview?.total_machines || 0}</p>
+              <p className="text-2xl md:text-3xl font-bold mt-1 md:mt-2">{overview?.total_machines || 0}</p>
               <p className="text-xs text-green-400 mt-1">
                 {overview?.online_machines || 0} online
               </p>
             </div>
-            <Zap className="text-snax-red" size={40} />
+            <Zap className="text-snax-red hidden sm:block" size={36} />
           </div>
         </div>
 
@@ -81,12 +81,12 @@ const DashboardPage: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-400 text-sm">Revenue (30 Days)</p>
-              <p className="text-3xl font-bold mt-2">
+              <p className="text-lg md:text-3xl font-bold mt-1 md:mt-2">
                 ${(overview?.revenue_30_days || 0).toFixed(2)}
               </p>
               <p className="text-xs text-gray-400 mt-1">Total earnings</p>
             </div>
-            <TrendingUp className="text-snax-red" size={40} />
+            <TrendingUp className="text-snax-red hidden sm:block" size={36} />
           </div>
         </div>
 
@@ -95,10 +95,10 @@ const DashboardPage: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-400 text-sm">Low Stock Alerts</p>
-              <p className="text-3xl font-bold mt-2">{overview?.low_stock_alerts || 0}</p>
+              <p className="text-2xl md:text-3xl font-bold mt-1 md:mt-2">{overview?.low_stock_alerts || 0}</p>
               <p className="text-xs text-yellow-400 mt-1">Items to restock</p>
             </div>
-            <Package className="text-snax-red" size={40} />
+            <Package className="text-snax-red hidden sm:block" size={36} />
           </div>
         </div>
 
@@ -107,10 +107,10 @@ const DashboardPage: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-400 text-sm">Open Tickets</p>
-              <p className="text-3xl font-bold mt-2">{overview?.open_tickets || 0}</p>
+              <p className="text-2xl md:text-3xl font-bold mt-1 md:mt-2">{overview?.open_tickets || 0}</p>
               <p className="text-xs text-blue-400 mt-1">Support requests</p>
             </div>
-            <AlertCircle className="text-snax-red" size={40} />
+            <AlertCircle className="text-snax-red hidden sm:block" size={36} />
           </div>
         </div>
       </div>
@@ -119,7 +119,7 @@ const DashboardPage: React.FC = () => {
       {revenueSummary && revenueSummary.daily_revenue.length > 0 && (
         <div className="card">
           <h2 className="text-xl font-bold mb-4">Revenue Trend (Last 30 Days)</h2>
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={220}>
             <LineChart data={revenueSummary.daily_revenue}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey="date" stroke="#9CA3AF" />
@@ -146,19 +146,19 @@ const DashboardPage: React.FC = () => {
         {machineStatus.length > 0 ? (
           <div className="space-y-3">
             {machineStatus.map((machine) => (
-              <div key={machine.id} className="flex items-center justify-between p-4 bg-gray-800 rounded-lg">
+              <div key={machine.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 md:p-4 bg-gray-800 rounded-lg gap-2">
                 <div className="flex-1">
                   <p className="font-medium">{machine.machine_id}</p>
                   <p className="text-sm text-gray-400">{machine.location}</p>
                 </div>
-                <div className="flex items-center space-x-4">
-                  <div className="text-right">
-                    <p className="text-sm text-gray-400">Inventory</p>
-                    <p className="font-bold">{machine.inventory_percentage}%</p>
+                <div className="flex items-center space-x-3 flex-wrap gap-y-1">
+                  <div>
+                    <p className="text-xs text-gray-400">Inventory</p>
+                    <p className="font-bold text-sm">{machine.inventory_percentage}%</p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm text-gray-400">Revenue</p>
-                    <p className="font-bold">${machine.monthly_revenue.toFixed(2)}</p>
+                  <div>
+                    <p className="text-xs text-gray-400">Revenue</p>
+                    <p className="font-bold text-sm">${machine.monthly_revenue.toFixed(2)}</p>
                   </div>
                   <div>
                     <span

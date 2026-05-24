@@ -152,15 +152,16 @@ const SupportTicketsPage: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-4xl font-bold mb-2">Support Tickets</h1>
+          <h1 className="text-2xl md:text-4xl font-bold mb-1 md:mb-2">Support Tickets</h1>
           <p className="text-gray-400">Manage your support requests</p>
         </div>
         <button
           onClick={() => setShowForm(true)}
-          className="btn-primary flex items-center space-x-2"
+          className="btn-primary flex items-center space-x-2 flex-shrink-0"
         >
           <Plus size={20} />
-          <span>New Ticket</span>
+          <span className="hidden sm:inline">New Ticket</span>
+          <span className="sm:hidden">New</span>
         </button>
       </div>
 
@@ -173,14 +174,14 @@ const SupportTicketsPage: React.FC = () => {
       )}
 
       {/* Statistics */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-3 md:gap-4">
         <div className="card-hover">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-400 text-sm">Total Tickets</p>
-              <p className="text-3xl font-bold mt-2">{tickets.length}</p>
+              <p className="text-2xl md:text-3xl font-bold mt-1 md:mt-2">{tickets.length}</p>
             </div>
-            <Ticket className="text-snax-red" size={40} />
+            <Ticket className="text-snax-red hidden sm:block" size={36} />
           </div>
         </div>
 
@@ -188,9 +189,9 @@ const SupportTicketsPage: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-400 text-sm">Open</p>
-              <p className="text-3xl font-bold mt-2">{openTickets.length}</p>
+              <p className="text-2xl md:text-3xl font-bold mt-1 md:mt-2">{openTickets.length}</p>
             </div>
-            <MessageSquare className="text-yellow-500" size={40} />
+            <MessageSquare className="text-yellow-500 hidden sm:block" size={36} />
           </div>
         </div>
 
@@ -198,9 +199,9 @@ const SupportTicketsPage: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-gray-400 text-sm">Resolved</p>
-              <p className="text-3xl font-bold mt-2">{resolvedTickets.length}</p>
+              <p className="text-2xl md:text-3xl font-bold mt-1 md:mt-2">{resolvedTickets.length}</p>
             </div>
-            <MessageSquare className="text-green-500" size={40} />
+            <MessageSquare className="text-green-500 hidden sm:block" size={36} />
           </div>
         </div>
       </div>
@@ -323,10 +324,10 @@ const SupportTicketsPage: React.FC = () => {
         {filteredTickets.length > 0 ? (
           filteredTickets.map((ticket) => (
             <div key={ticket.id} className="card-hover">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <div className="flex items-center space-x-3 mb-2">
-                    <h3 className="text-lg font-bold">{ticket.subject}</h3>
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <h3 className="text-base md:text-lg font-bold truncate">{ticket.subject}</h3>
                     <span
                       className={`px-3 py-1 rounded-full text-sm font-medium ${
                         ticket.priority === 'urgent'
@@ -347,7 +348,7 @@ const SupportTicketsPage: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="flex items-center space-x-2 ml-4">
+                <div className="flex items-center space-x-2 ml-2 flex-shrink-0">
                   <select
                     value={ticket.status}
                     onChange={(e) => handleStatusChange(ticket.id, e.target.value)}

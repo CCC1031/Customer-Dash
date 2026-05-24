@@ -119,15 +119,16 @@ const MachinesPage: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-4xl font-bold mb-2">Machine Management</h1>
+          <h1 className="text-2xl md:text-4xl font-bold mb-1 md:mb-2">Machine Management</h1>
           <p className="text-gray-400">Manage your vending machines</p>
         </div>
         <button
           onClick={() => setShowForm(true)}
-          className="btn-primary flex items-center space-x-2"
+          className="btn-primary flex items-center space-x-2 flex-shrink-0"
         >
           <Plus size={20} />
-          <span>Add Machine</span>
+          <span className="hidden sm:inline">Add Machine</span>
+          <span className="sm:hidden">Add</span>
         </button>
       </div>
 
@@ -215,7 +216,7 @@ const MachinesPage: React.FC = () => {
       )}
 
       {/* Machines List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {machines.length > 0 ? (
           machines.map((machine) => (
             <div key={machine.id} className="card-hover">

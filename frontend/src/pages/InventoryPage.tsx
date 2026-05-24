@@ -181,15 +181,16 @@ const InventoryPage: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-4xl font-bold mb-2">Inventory Management</h1>
+          <h1 className="text-2xl md:text-4xl font-bold mb-1 md:mb-2">Inventory Management</h1>
           <p className="text-gray-400">Track and manage product inventory</p>
         </div>
         <button
           onClick={() => setShowForm(true)}
-          className="btn-primary flex items-center space-x-2"
+          className="btn-primary flex items-center space-x-2 flex-shrink-0"
         >
           <Plus size={20} />
-          <span>Add Item</span>
+          <span className="hidden sm:inline">Add Item</span>
+          <span className="sm:hidden">Add</span>
         </button>
       </div>
 
@@ -336,8 +337,8 @@ const InventoryPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Inventory Table */}
-      <div className="card overflow-x-auto">
+      {/* Inventory Table - Desktop */}
+      <div className="card hidden md:block overflow-x-auto">
         {filteredInventory.length > 0 ? (
           <table className="w-full">
             <thead>
@@ -358,32 +359,18 @@ const InventoryPage: React.FC = () => {
                   <td className="py-3 px-4">{item.quantity}</td>
                   <td className="py-3 px-4 text-gray-400">{item.low_stock_threshold}</td>
                   <td className="py-3 px-4">
-                    <span
-                      className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        item.status === 'in_stock'
-                          ? 'bg-green-900 text-green-200'
-                          : item.status === 'low_stock'
-                          ? 'bg-yellow-900 text-yellow-200'
-                          : 'bg-red-900 text-red-200'
-                      }`}
-                    >
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                      item.status === 'in_stock' ? 'bg-green-900 text-green-200'
+                      : item.status === 'low_stock' ? 'bg-yellow-900 text-yellow-200'
+                      : 'bg-red-900 text-red-200'
+                    }`}>
                       {item.status.replace('_', ' ')}
                     </span>
                   </td>
                   <td className="py-3 px-4">
                     <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleEdit(item)}
-                        className="text-snax-red hover:text-red-400 transition-colors"
-                      >
-                        <Edit2 size={18} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        className="text-red-500 hover:text-red-400 transition-colors"
-                      >
-                        <Trash2 size={18} />
-                      </button>
+                      <button onClick={() => handleEdit(item)} className="text-snax-red hover:text-red-400 transition-colors"><Edit2 size={18} /></button>
+                      <button onClick={() => handleDelete(item.id)} className="text-red-500 hover:text-red-400 transition-colors"><Trash2 size={18} /></button>
                     </div>
                   </td>
                 </tr>
@@ -394,12 +381,44 @@ const InventoryPage: React.FC = () => {
           <div className="text-center py-12">
             <Package className="mx-auto text-gray-600 mb-4" size={48} />
             <p className="text-gray-400 mb-4">No inventory items found</p>
-            <button
-              onClick={() => setShowForm(true)}
-              className="btn-primary"
-            >
-              Add Your First Item
-            </button>
+            <button onClick={() => setShowForm(true)} className="btn-primary">Add Your First Item</button>
+          </div>
+        )}
+      </div>
+
+      {/* Inventory Cards - Mobile */}
+      <div className="md:hidden space-y-3">
+        {filteredInventory.length > 0 ? filteredInventory.map((item) => (
+          <div key={item.id} className="card p-4">
+            <div className="flex items-start justify-between mb-2">
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold truncate">{item.product_name}</p>
+                <p className="text-xs text-gray-400">{item.sku || 'No SKU'}</p>
+              </div>
+              <span className={`ml-2 flex-shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${
+                item.status === 'in_stock' ? 'bg-green-900 text-green-200'
+                : item.status === 'low_stock' ? 'bg-yellow-900 text-yellow-200'
+                : 'bg-red-900 text-red-200'
+              }`}>
+                {item.status.replace('_', ' ')}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex space-x-4 text-sm">
+                <span className="text-gray-400">Qty: <span className="text-white font-medium">{item.quantity}</span></span>
+                <span className="text-gray-400">Min: <span className="text-white font-medium">{item.low_stock_threshold}</span></span>
+              </div>
+              <div className="flex space-x-3">
+                <button onClick={() => handleEdit(item)} className="text-snax-red hover:text-red-400 transition-colors p-1"><Edit2 size={16} /></button>
+                <button onClick={() => handleDelete(item.id)} className="text-red-500 hover:text-red-400 transition-colors p-1"><Trash2 size={16} /></button>
+              </div>
+            </div>
+          </div>
+        )) : (
+          <div className="card text-center py-12">
+            <Package className="mx-auto text-gray-600 mb-4" size={48} />
+            <p className="text-gray-400 mb-4">No inventory items found</p>
+            <button onClick={() => setShowForm(true)} className="btn-primary">Add Your First Item</button>
           </div>
         )}
       </div>
