@@ -353,6 +353,30 @@ def dashboard_overview(current_user):
                     'open_tickets': open_tickets, 'recent_activities': []}), 200
 
 
+@app.route('/api/dashboard/revenue-summary', methods=['GET'])
+@token_required
+def dashboard_revenue_summary(current_user):
+    thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
+    revenue_records = Revenue.query.filter(
+        Revenue.user_id == current_user.id,
+        Revenue.date >= thirty_days_ago
+    ).order_by(Revenue.date).all()
+    daily = {}
+    for r in revenue_records:
+        d = r.date.isoformat() if hasattr(r.date, 'isoformat') else str(r.date)
+        daily[d] = daily.get(d, 0) + r.total_revenue
+    daily_revenue = [{'date': k, 'revenue': round(v, 2)} for k, v in sorted(daily.items())]
+    total = round(sum(r.total_revenue for r in revenue_records), 2)
+    return jsonify({'daily_revenue': daily_revenue, 'total_revenue': total}), 200
+
+
+@app.route('/api/dashboard/machine-status', methods=['GET'])
+@token_required
+def dashboard_machine_status(current_user):
+    machines = Machine.query.filter_by(user_id=current_user.id).all()
+    return jsonify({'machines': [m.to_dict() for m in machines]}), 200
+
+
 # ============================================================================
 # MACHINES
 # ============================================================================
