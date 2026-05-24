@@ -549,3 +549,24 @@ def server_error(e):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(debug=False, host='0.0.0.0', port=port)
+
+
+@app.route('/api/debug/env', methods=['GET'])
+def debug_env():
+    """Temporary debug endpoint - shows DB connection info (remove after debugging)"""
+    import os
+    db_url = os.environ.get('DATABASE_URL', 'NOT SET')
+    pghost = os.environ.get('PGHOST', 'NOT SET')
+    pgport = os.environ.get('PGPORT', 'NOT SET')
+    pguser = os.environ.get('POSTGRES_USER', 'NOT SET')
+    pgdb = os.environ.get('POSTGRES_DB', 'NOT SET')
+    # Mask password
+    masked_url = db_url[:30] + '...' if len(db_url) > 30 else db_url
+    return jsonify({
+        'DATABASE_URL_prefix': masked_url,
+        'PGHOST': pghost,
+        'PGPORT': pgport,
+        'POSTGRES_USER': pguser,
+        'POSTGRES_DB': pgdb,
+        'db_in_use': app.config['SQLALCHEMY_DATABASE_URI'][:30]
+    }), 200
