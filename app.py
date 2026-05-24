@@ -82,10 +82,33 @@ class Machine(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
-        return {'id': self.id, 'user_id': self.user_id, 'name': self.name,
-                'location': self.location, 'device_id': self.device_id, 'status': self.status,
-                'last_seen': self.last_seen.isoformat() if self.last_seen else None,
-                'created_at': self.created_at.isoformat()}
+        # Calculate inventory percentage and monthly revenue for frontend compatibility
+        from sqlalchemy import func
+        inv_items = Inventory.query.filter_by(machine_id=self.id).all()
+        if inv_items:
+            total_cap = sum(i.low_stock_threshold * 5 for i in inv_items)
+            total_qty = sum(i.quantity for i in inv_items)
+            inv_pct = round((total_qty / total_cap * 100) if total_cap > 0 else 0, 1)
+        else:
+            inv_pct = 0
+        from datetime import datetime, timedelta
+        thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
+        rev_records = Revenue.query.filter(Revenue.machine_id == self.id, Revenue.date >= thirty_days_ago).all()
+        monthly_rev = round(sum(r.total_revenue for r in rev_records), 2)
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'machine_id': self.device_id or self.name,  # frontend uses machine_id
+            'name': self.name,
+            'location': self.location,
+            'device_id': self.device_id,
+            'status': self.status,
+            'inventory_percentage': min(inv_pct, 100),
+            'monthly_revenue': monthly_rev,
+            'last_restock': None,
+            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
+            'created_at': self.created_at.isoformat()
+        }
 
 
 class Inventory(db.Model):
@@ -345,8 +368,12 @@ def get_machines(current_user):
 @token_required
 def create_machine(current_user):
     data = request.get_json()
-    machine = Machine(user_id=current_user.id, name=data.get('name', 'New Machine'),
-        location=data.get('location', ''), device_id=data.get('device_id', ''),
+    # Frontend sends machine_id (display ID), map to both name and device_id
+    machine_id_val = data.get('machine_id', data.get('name', 'New Machine'))
+    machine = Machine(user_id=current_user.id, 
+        name=data.get('name', machine_id_val),
+        location=data.get('location', ''), 
+        device_id=data.get('device_id', machine_id_val),
         status=data.get('status', 'offline'))
     db.session.add(machine)
     db.session.commit()
