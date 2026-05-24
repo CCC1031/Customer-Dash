@@ -1,652 +1,452 @@
 """
 HAHA Vending Machine API Integration Module
 
-This module provides integration with HAHA Vending machines for:
-- Real-time machine data synchronization
-- Inventory tracking and updates
-- Revenue data collection
-- Machine status monitoring
-- Automatic data refresh intervals
+Real integration with the HAHA Vending API at https://thorapi.hahabianli.com
+
+Authentication:
+  POST /open/auth/gettoken  { appkey, appsecret }  -> access_token (valid 15 days)
+  All subsequent requests: header  Authorization: <token>  (NO "Bearer" prefix)
+
+Key endpoints used:
+  GET /open/order?limit=N&page=N  -> paginated order list
+  GET /open/order/{order_no}      -> single order detail
+
+Order status codes:
+  100 = Unpaid
+  101 = Paid  (the only status counted as revenue)
+  102 = No consumption
+  103 = Partially paid
+  200 = Payment confirmation in progress
 """
 
 import requests
 import json
+import os
+import time
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-import logging
 from functools import wraps
-import time
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class HAHAVendingAPI:
     """
-    HAHA Vending Machine API Client
-    
-    Handles authentication, data synchronization, and real-time updates
-    from HAHA vending machines.
+    Real HAHA Vending Machine API Client.
+
+    Handles token acquisition/caching, order fetching, and revenue aggregation.
+    All methods return empty lists / dicts on failure so callers never crash.
     """
-    
-    def __init__(self, merchant_id: str, api_key: str, base_url: str = "https://api.hahavending.com"):
-        """
-        Initialize HAHA API client
-        
-        Args:
-            merchant_id: HAHA merchant ID
-            api_key: HAHA API key for authentication
-            base_url: Base URL for HAHA API (default: production)
-        """
-        self.merchant_id = merchant_id
-        self.api_key = api_key
-        self.base_url = base_url
+
+    BASE_URL = "https://thorapi.hahabianli.com"
+
+    def __init__(self,
+                 appkey: str,
+                 appsecret: str,
+                 base_url: Optional[str] = None):
+        self.appkey = appkey
+        self.appsecret = appsecret
+        self.base_url = (base_url or self.BASE_URL).rstrip("/")
+
+        # Token cache
+        self._token: Optional[str] = None
+        self._token_expire: float = 0.0   # Unix timestamp
+
+        # Simple in-memory response cache
+        self._cache: Dict[str, Tuple[float, object]] = {}
+        self.cache_ttl = 300  # 5 minutes
+
         self.session = requests.Session()
         self.session.headers.update({
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-            'User-Agent': 'Snaxology-Portal/1.0'
+            "Content-Type": "application/json",
+            "User-Agent": "Snaxology-Portal/2.0"
         })
-        self.last_sync = {}
-        self.cache = {}
-        self.cache_ttl = 300  # 5 minutes
-        
-    def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict:
-        """
-        Make HTTP request to HAHA API with error handling
-        
-        Args:
-            method: HTTP method (GET, POST, PUT, DELETE)
-            endpoint: API endpoint path
-            **kwargs: Additional request parameters
-            
-        Returns:
-            Response JSON data
-        """
-        url = f"{self.base_url}/{endpoint}"
-        
-        try:
-            response = self.session.request(method, url, timeout=10, **kwargs)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.Timeout:
-            logger.error(f"Timeout connecting to HAHA API: {endpoint}")
-            return {'error': 'API timeout', 'status': 'error'}
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Connection error to HAHA API: {endpoint}")
-            return {'error': 'Connection failed', 'status': 'error'}
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error from HAHA API: {e.response.status_code}")
-            return {'error': f'HTTP {e.response.status_code}', 'status': 'error'}
-        except Exception as e:
-            logger.error(f"Unexpected error in HAHA API request: {str(e)}")
-            return {'error': str(e), 'status': 'error'}
-    
-    def _get_cached(self, key: str) -> Optional[Dict]:
-        """Get cached data if still valid"""
-        if key in self.cache:
-            data, timestamp = self.cache[key]
-            if time.time() - timestamp < self.cache_ttl:
-                return data
-        return None
-    
-    def _set_cache(self, key: str, data: Dict) -> None:
-        """Cache data with timestamp"""
-        self.cache[key] = (data, time.time())
-    
-    def authenticate(self) -> bool:
-        """
-        Authenticate with HAHA API
-        
-        Returns:
-            True if authentication successful, False otherwise
-        """
-        try:
-            response = self._make_request('GET', 'v1/auth/verify')
-            if response.get('status') == 'success':
-                logger.info(f"Successfully authenticated with HAHA API for merchant {self.merchant_id}")
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Authentication failed: {str(e)}")
-            return False
-    
-    def get_machines(self, force_refresh: bool = False) -> List[Dict]:
-        """
-        Get all machines for the merchant
-        
-        Args:
-            force_refresh: Force refresh from API (ignore cache)
-            
-        Returns:
-            List of machine data dictionaries
-        """
-        cache_key = f"machines_{self.merchant_id}"
-        
-        if not force_refresh:
-            cached = self._get_cached(cache_key)
-            if cached:
-                return cached
-        
-        response = self._make_request('GET', f'v1/merchants/{self.merchant_id}/machines')
-        
-        if response.get('status') == 'success':
-            machines = response.get('data', [])
-            self._set_cache(cache_key, machines)
-            self.last_sync['machines'] = datetime.utcnow().isoformat()
-            return machines
-        
-        logger.warning(f"Failed to fetch machines: {response.get('error')}")
-        return []
-    
-    def get_machine_status(self, device_id: str) -> Dict:
-        """
-        Get real-time status of a specific machine
-        
-        Args:
-            device_id: HAHA device ID
-            
-        Returns:
-            Machine status data
-        """
-        response = self._make_request('GET', f'v1/devices/{device_id}/status')
-        
-        if response.get('status') == 'success':
-            return response.get('data', {})
-        
-        logger.warning(f"Failed to fetch machine status for {device_id}")
-        return {}
-    
-    def get_machine_inventory(self, device_id: str) -> List[Dict]:
-        """
-        Get current inventory for a machine
-        
-        Args:
-            device_id: HAHA device ID
-            
-        Returns:
-            List of inventory items with quantities
-        """
-        response = self._make_request('GET', f'v1/devices/{device_id}/inventory')
-        
-        if response.get('status') == 'success':
-            return response.get('data', [])
-        
-        logger.warning(f"Failed to fetch inventory for {device_id}")
-        return []
-    
-    def get_machine_revenue(self, device_id: str, 
-                           start_date: Optional[str] = None,
-                           end_date: Optional[str] = None) -> List[Dict]:
-        """
-        Get revenue data for a machine
-        
-        Args:
-            device_id: HAHA device ID
-            start_date: Start date (YYYY-MM-DD format)
-            end_date: End date (YYYY-MM-DD format)
-            
-        Returns:
-            List of revenue records
-        """
-        if not start_date:
-            start_date = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
-        if not end_date:
-            end_date = datetime.utcnow().strftime('%Y-%m-%d')
-        
-        params = {
-            'start_date': start_date,
-            'end_date': end_date
-        }
-        
-        response = self._make_request('GET', f'v1/devices/{device_id}/revenue', params=params)
-        
-        if response.get('status') == 'success':
-            return response.get('data', [])
-        
-        logger.warning(f"Failed to fetch revenue for {device_id}")
-        return []
-    
-    def get_all_revenue(self, start_date: Optional[str] = None,
-                       end_date: Optional[str] = None) -> List[Dict]:
-        """
-        Get aggregated revenue for all machines
-        
-        Args:
-            start_date: Start date (YYYY-MM-DD format)
-            end_date: End date (YYYY-MM-DD format)
-            
-        Returns:
-            List of revenue records across all machines
-        """
-        if not start_date:
-            start_date = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
-        if not end_date:
-            end_date = datetime.utcnow().strftime('%Y-%m-%d')
-        
-        params = {
-            'start_date': start_date,
-            'end_date': end_date
-        }
-        
-        response = self._make_request('GET', f'v1/merchants/{self.merchant_id}/revenue', params=params)
-        
-        if response.get('status') == 'success':
-            return response.get('data', [])
-        
-        logger.warning("Failed to fetch aggregated revenue")
-        return []
-    
-    def get_machine_transactions(self, device_id: str, limit: int = 100) -> List[Dict]:
-        """
-        Get recent transactions for a machine
-        
-        Args:
-            device_id: HAHA device ID
-            limit: Maximum number of transactions to return
-            
-        Returns:
-            List of transaction records
-        """
-        params = {'limit': limit}
-        response = self._make_request('GET', f'v1/devices/{device_id}/transactions', params=params)
-        
-        if response.get('status') == 'success':
-            return response.get('data', [])
-        
-        logger.warning(f"Failed to fetch transactions for {device_id}")
-        return []
-    
-    def update_machine_settings(self, device_id: str, settings: Dict) -> bool:
-        """
-        Update machine settings
-        
-        Args:
-            device_id: HAHA device ID
-            settings: Settings dictionary to update
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        response = self._make_request('PUT', f'v1/devices/{device_id}/settings', json=settings)
-        
-        if response.get('status') == 'success':
-            logger.info(f"Successfully updated settings for machine {device_id}")
-            return True
-        
-        logger.warning(f"Failed to update machine settings: {response.get('error')}")
-        return False
-    
-    def report_machine_issue(self, device_id: str, issue_type: str, description: str) -> bool:
-        """
-        Report an issue with a machine
-        
-        Args:
-            device_id: HAHA device ID
-            issue_type: Type of issue (e.g., 'dispenser_jam', 'payment_error')
-            description: Detailed description of the issue
-            
-        Returns:
-            True if reported successfully, False otherwise
-        """
-        data = {
-            'issue_type': issue_type,
-            'description': description,
-            'reported_at': datetime.utcnow().isoformat()
-        }
-        
-        response = self._make_request('POST', f'v1/devices/{device_id}/issues', json=data)
-        
-        if response.get('status') == 'success':
-            logger.info(f"Issue reported for machine {device_id}")
-            return True
-        
-        logger.warning(f"Failed to report issue: {response.get('error')}")
-        return False
 
+    # ------------------------------------------------------------------
+    # Token management
+    # ------------------------------------------------------------------
+
+    def _acquire_token(self) -> Optional[str]:
+        """Fetch a fresh access token from the HAHA auth endpoint."""
+        url = f"{self.base_url}/open/auth/gettoken"
+        try:
+            resp = self.session.post(
+                url,
+                json={"appkey": self.appkey, "appsecret": self.appsecret},
+                timeout=15
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            if body.get("success") == "true" and body.get("data"):
+                token = body["data"]["access_token"]
+                expire = body["data"].get("expire", 0)
+                # Refresh 2 days before actual expiry
+                self._token = token
+                self._token_expire = float(expire) - 172800
+                logger.info("HAHA API: token acquired, expires %s",
+                            datetime.fromtimestamp(float(expire)).isoformat())
+                return token
+            logger.error("HAHA API: token acquisition failed: %s", body)
+            return None
+        except Exception as exc:
+            logger.error("HAHA API: token request exception: %s", exc)
+            return None
+
+    def _get_token(self) -> Optional[str]:
+        """Return a valid token, refreshing if needed."""
+        if self._token and time.time() < self._token_expire:
+            return self._token
+        return self._acquire_token()
+
+    # ------------------------------------------------------------------
+    # Low-level request helper
+    # ------------------------------------------------------------------
+
+    def _get(self, path: str, params: Optional[Dict] = None) -> Optional[Dict]:
+        """
+        Perform an authenticated GET request.
+        Returns the parsed JSON body, or None on failure.
+        """
+        token = self._get_token()
+        if not token:
+            logger.error("HAHA API: no valid token available")
+            return None
+
+        url = f"{self.base_url}{path}"
+        try:
+            resp = self.session.get(
+                url,
+                params=params,
+                headers={"Authorization": token},
+                timeout=20
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            if body.get("success") == "true":
+                return body
+            logger.warning("HAHA API: non-success response for %s: code=%s",
+                           path, body.get("code"))
+            return None
+        except requests.exceptions.Timeout:
+            logger.error("HAHA API: timeout on %s", path)
+        except requests.exceptions.ConnectionError as exc:
+            logger.error("HAHA API: connection error on %s: %s", path, exc)
+        except requests.exceptions.HTTPError as exc:
+            logger.error("HAHA API: HTTP error on %s: %s", path, exc)
+        except Exception as exc:
+            logger.error("HAHA API: unexpected error on %s: %s", path, exc)
+        return None
+
+    # ------------------------------------------------------------------
+    # Cache helpers
+    # ------------------------------------------------------------------
+
+    def _cache_get(self, key: str) -> Optional[object]:
+        if key in self._cache:
+            ts, val = self._cache[key]
+            if time.time() - ts < self.cache_ttl:
+                return val
+        return None
+
+    def _cache_set(self, key: str, val: object) -> None:
+        self._cache[key] = (time.time(), val)
+
+    # ------------------------------------------------------------------
+    # Public API methods
+    # ------------------------------------------------------------------
+
+    def authenticate(self) -> bool:
+        """Return True if we can obtain a valid token."""
+        return self._get_token() is not None
+
+    def get_orders(self,
+                   page: int = 1,
+                   limit: int = 100,
+                   start_date: Optional[str] = None,
+                   end_date: Optional[str] = None,
+                   sticker_num: Optional[str] = None,
+                   pay_start_time: Optional[str] = None,
+                   pay_end_time: Optional[str] = None) -> Dict:
+        """
+        Fetch a page of orders.
+
+        Returns the full data dict:
+          { count, pageCount, pageNow, pageIndex, pageSize, list: [...] }
+        or an empty dict on failure.
+        """
+        params: Dict = {"limit": limit, "page": page}
+        if start_date:
+            params["start_time"] = start_date
+        if end_date:
+            params["end_time"] = end_date
+        if sticker_num:
+            params["sticker_num"] = sticker_num
+        if pay_start_time:
+            params["pay_start_time"] = pay_start_time
+        if pay_end_time:
+            params["pay_end_time"] = pay_end_time
+
+        body = self._get("/open/order", params=params)
+        if body and body.get("data"):
+            return body["data"]
+        return {}
+
+    def get_all_paid_orders(self,
+                            start_date: Optional[str] = None,
+                            end_date: Optional[str] = None,
+                            max_pages: int = 20) -> List[Dict]:
+        """
+        Fetch all paid orders (status=101) across multiple pages.
+
+        Stops after max_pages to avoid very long requests.
+        Returns a flat list of order dicts.
+        """
+        cache_key = f"paid_orders_{start_date}_{end_date}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore
+
+        all_orders: List[Dict] = []
+        page = 1
+        while page <= max_pages:
+            data = self.get_orders(
+                page=page, limit=100,
+                start_date=start_date, end_date=end_date
+            )
+            if not data:
+                break
+            orders = data.get("list", [])
+            # Keep only paid orders
+            paid = [o for o in orders if o.get("status") == 101]
+            all_orders.extend(paid)
+
+            page_count = data.get("pageCount", 1)
+            if page >= page_count:
+                break
+            page += 1
+
+        self._cache_set(cache_key, all_orders)
+        logger.info("HAHA API: fetched %d paid orders (pages 1-%d)", len(all_orders), page)
+        return all_orders
+
+    def get_machines_from_orders(self,
+                                  days: int = 30) -> List[Dict]:
+        """
+        Derive the list of unique machines from recent order history.
+
+        Since the HAHA API does not expose a dedicated device-list endpoint
+        in the available documentation, we build the machine list by
+        collecting unique (sticker_num, device_name) pairs from orders.
+
+        Returns a list of dicts:
+          { sticker_num, device_name, order_count, total_revenue, last_order_time }
+        """
+        cache_key = f"machines_from_orders_{days}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore
+
+        end_date = datetime.utcnow().strftime("%Y-%m-%d")
+        start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        # Fetch a broader set (all statuses) to identify machines
+        all_orders: List[Dict] = []
+        page = 1
+        while page <= 10:
+            data = self.get_orders(page=page, limit=100,
+                                   start_date=start_date, end_date=end_date)
+            if not data:
+                break
+            all_orders.extend(data.get("list", []))
+            if page >= data.get("pageCount", 1):
+                break
+            page += 1
+
+        # Aggregate by sticker_num
+        machines: Dict[str, Dict] = {}
+        for order in all_orders:
+            sn = order.get("sticker_num", "")
+            dn = order.get("device_name", sn)
+            if not sn:
+                continue
+            if sn not in machines:
+                machines[sn] = {
+                    "sticker_num": sn,
+                    "device_name": dn or sn,
+                    "order_count": 0,
+                    "total_revenue": 0.0,
+                    "last_order_time": None
+                }
+            machines[sn]["order_count"] += 1
+            if order.get("status") == 101:
+                try:
+                    machines[sn]["total_revenue"] += float(
+                        order.get("actual_payment_amount", 0) or 0
+                    )
+                except (ValueError, TypeError):
+                    pass
+            ct = order.get("create_time")
+            if ct:
+                if (machines[sn]["last_order_time"] is None or
+                        ct > machines[sn]["last_order_time"]):
+                    machines[sn]["last_order_time"] = ct
+
+        result = sorted(machines.values(),
+                        key=lambda m: m["total_revenue"], reverse=True)
+        self._cache_set(cache_key, result)
+        return result
+
+    def get_revenue_summary(self,
+                             days: int = 30) -> Dict:
+        """
+        Return a revenue summary for the last N days.
+
+        Returns:
+          {
+            total_revenue: float,
+            order_count: int,
+            daily_revenue: [ { date: str, revenue: float, orders: int }, ... ],
+            by_machine: [ { sticker_num, device_name, revenue, orders }, ... ]
+          }
+        """
+        cache_key = f"revenue_summary_{days}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached  # type: ignore
+
+        end_date = datetime.utcnow().strftime("%Y-%m-%d")
+        start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        paid_orders = self.get_all_paid_orders(
+            start_date=start_date, end_date=end_date, max_pages=20
+        )
+
+        daily: Dict[str, Dict] = {}
+        by_machine: Dict[str, Dict] = {}
+        total_revenue = 0.0
+
+        for order in paid_orders:
+            amount = 0.0
+            try:
+                amount = float(order.get("actual_payment_amount", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+
+            # Daily aggregation
+            pay_time = order.get("pay_time") or order.get("create_time", "")
+            date_str = pay_time[:10] if pay_time else "unknown"
+            if date_str not in daily:
+                daily[date_str] = {"date": date_str, "revenue": 0.0, "orders": 0}
+            daily[date_str]["revenue"] += amount
+            daily[date_str]["orders"] += 1
+
+            # Per-machine aggregation
+            sn = order.get("sticker_num", "unknown")
+            dn = order.get("device_name", sn)
+            if sn not in by_machine:
+                by_machine[sn] = {
+                    "sticker_num": sn,
+                    "device_name": dn,
+                    "revenue": 0.0,
+                    "orders": 0
+                }
+            by_machine[sn]["revenue"] += amount
+            by_machine[sn]["orders"] += 1
+            total_revenue += amount
+
+        # Round revenue values
+        for d in daily.values():
+            d["revenue"] = round(d["revenue"], 2)
+        for m in by_machine.values():
+            m["revenue"] = round(m["revenue"], 2)
+
+        result = {
+            "total_revenue": round(total_revenue, 2),
+            "order_count": len(paid_orders),
+            "daily_revenue": sorted(daily.values(), key=lambda x: x["date"]),
+            "by_machine": sorted(by_machine.values(),
+                                  key=lambda x: x["revenue"], reverse=True)
+        }
+        self._cache_set(cache_key, result)
+        return result
+
+    def get_recent_orders(self, limit: int = 20) -> List[Dict]:
+        """Return the most recent N orders (any status)."""
+        data = self.get_orders(page=1, limit=limit)
+        return data.get("list", [])
+
+    def clear_cache(self) -> None:
+        """Invalidate all cached responses."""
+        self._cache.clear()
+        logger.info("HAHA API: cache cleared")
+
+
+# ---------------------------------------------------------------------------
+# Legacy mock kept for backward compatibility (not used in production)
+# ---------------------------------------------------------------------------
+
+class HAHAVendingAPIMock(HAHAVendingAPI):
+    """
+    Thin mock subclass — only used when real credentials are unavailable.
+    In production the real HAHAVendingAPI is always instantiated.
+    """
+
+    def __init__(self, merchant_id: str = "demo_merchant"):
+        # Provide dummy credentials; all calls will fail gracefully
+        super().__init__(appkey="demo_key", appsecret="demo_secret")
+        self.merchant_id = merchant_id
+
+    def authenticate(self) -> bool:
+        logger.info("Mock HAHA API: simulated authentication")
+        return True
+
+    def get_machines_from_orders(self, days: int = 30) -> List[Dict]:
+        return [
+            {"sticker_num": "B151690", "device_name": "10X Frozen",
+             "order_count": 50, "total_revenue": 450.00, "last_order_time": None},
+            {"sticker_num": "B153262", "device_name": "10X Essentials",
+             "order_count": 80, "total_revenue": 720.00, "last_order_time": None},
+            {"sticker_num": "B153289", "device_name": "10X Fuel",
+             "order_count": 65, "total_revenue": 580.00, "last_order_time": None},
+            {"sticker_num": "B153295", "device_name": "10X Grab & Go",
+             "order_count": 90, "total_revenue": 810.00, "last_order_time": None},
+        ]
+
+    def get_revenue_summary(self, days: int = 30) -> Dict:
+        today = datetime.utcnow().date()
+        daily = []
+        for i in range(days):
+            d = (today - timedelta(days=i)).isoformat()
+            daily.append({"date": d, "revenue": round(50 + i * 2.5, 2), "orders": 10 + i})
+        return {
+            "total_revenue": round(sum(x["revenue"] for x in daily), 2),
+            "order_count": sum(x["orders"] for x in daily),
+            "daily_revenue": sorted(daily, key=lambda x: x["date"]),
+            "by_machine": self.get_machines_from_orders(days)
+        }
+
+    def get_recent_orders(self, limit: int = 20) -> List[Dict]:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# HAHADataSyncManager kept for backward compatibility
+# ---------------------------------------------------------------------------
 
 class HAHADataSyncManager:
-    """
-    Manages synchronization of HAHA data with local database
-    """
-    
+    """Thin wrapper kept so existing app.py import does not break."""
+
     def __init__(self, haha_api: HAHAVendingAPI, db_client=None):
-        """
-        Initialize data sync manager
-        
-        Args:
-            haha_api: HAHAVendingAPI instance
-            db_client: Database client for storing synced data
-        """
         self.haha_api = haha_api
         self.db = db_client
-        self.sync_intervals = {
-            'machines': 3600,      # 1 hour
-            'inventory': 1800,     # 30 minutes
-            'revenue': 3600,       # 1 hour
-            'transactions': 300    # 5 minutes
-        }
-        self.last_sync_time = {}
-    
-    def should_sync(self, sync_type: str) -> bool:
-        """Check if enough time has passed to sync"""
-        now = time.time()
-        last_sync = self.last_sync_time.get(sync_type, 0)
-        interval = self.sync_intervals.get(sync_type, 3600)
-        return (now - last_sync) >= interval
-    
-    def sync_machines(self, force: bool = False) -> Tuple[bool, str]:
-        """
-        Sync machine data from HAHA to local database
-        
-        Args:
-            force: Force sync regardless of interval
-            
-        Returns:
-            Tuple of (success, message)
-        """
-        if not force and not self.should_sync('machines'):
-            return True, "Skipped (too soon)"
-        
-        try:
-            machines = self.haha_api.get_machines(force_refresh=force)
-            
-            if not machines:
-                return False, "No machines returned from HAHA API"
-            
-            # Store in database (if db client available)
-            if self.db:
-                for machine in machines:
-                    self._store_machine(machine)
-            
-            self.last_sync_time['machines'] = time.time()
-            logger.info(f"Successfully synced {len(machines)} machines")
-            return True, f"Synced {len(machines)} machines"
-        
-        except Exception as e:
-            logger.error(f"Error syncing machines: {str(e)}")
-            return False, f"Error: {str(e)}"
-    
-    def sync_inventory(self, device_id: str, force: bool = False) -> Tuple[bool, str]:
-        """
-        Sync inventory data for a specific machine
-        
-        Args:
-            device_id: HAHA device ID
-            force: Force sync regardless of interval
-            
-        Returns:
-            Tuple of (success, message)
-        """
-        if not force and not self.should_sync('inventory'):
-            return True, "Skipped (too soon)"
-        
-        try:
-            inventory = self.haha_api.get_machine_inventory(device_id)
-            
-            if self.db:
-                for item in inventory:
-                    self._store_inventory_item(device_id, item)
-            
-            self.last_sync_time['inventory'] = time.time()
-            logger.info(f"Successfully synced inventory for {device_id}")
-            return True, f"Synced {len(inventory)} items"
-        
-        except Exception as e:
-            logger.error(f"Error syncing inventory: {str(e)}")
-            return False, f"Error: {str(e)}"
-    
-    def sync_revenue(self, device_id: Optional[str] = None, force: bool = False) -> Tuple[bool, str]:
-        """
-        Sync revenue data
-        
-        Args:
-            device_id: Specific device ID (None for all machines)
-            force: Force sync regardless of interval
-            
-        Returns:
-            Tuple of (success, message)
-        """
-        if not force and not self.should_sync('revenue'):
-            return True, "Skipped (too soon)"
-        
-        try:
-            if device_id:
-                revenue = self.haha_api.get_machine_revenue(device_id)
-                label = f"device {device_id}"
-            else:
-                revenue = self.haha_api.get_all_revenue()
-                label = "all machines"
-            
-            if self.db:
-                for record in revenue:
-                    self._store_revenue_record(record)
-            
-            self.last_sync_time['revenue'] = time.time()
-            logger.info(f"Successfully synced revenue for {label}")
-            return True, f"Synced {len(revenue)} revenue records"
-        
-        except Exception as e:
-            logger.error(f"Error syncing revenue: {str(e)}")
-            return False, f"Error: {str(e)}"
-    
-    def sync_all(self, force: bool = False) -> Dict[str, Tuple[bool, str]]:
-        """
-        Perform full data synchronization
-        
-        Args:
-            force: Force sync regardless of intervals
-            
-        Returns:
-            Dictionary of sync results
-        """
-        results = {}
-        
-        # Sync machines
-        success, msg = self.sync_machines(force)
-        results['machines'] = (success, msg)
-        
-        # Sync all machine data
-        if success:
-            machines = self.haha_api.get_machines()
-            for machine in machines:
-                device_id = machine.get('device_id')
-                
-                # Sync inventory
-                success, msg = self.sync_inventory(device_id, force)
-                results[f'inventory_{device_id}'] = (success, msg)
-                
-                # Sync revenue
-                success, msg = self.sync_revenue(device_id, force)
-                results[f'revenue_{device_id}'] = (success, msg)
-        
-        return results
-    
-    def _store_machine(self, machine: Dict) -> None:
-        """Store machine data in database"""
-        if not self.db:
-            return
-        
-        # Implementation depends on database client
-        logger.debug(f"Storing machine: {machine.get('device_id')}")
-    
-    def _store_inventory_item(self, device_id: str, item: Dict) -> None:
-        """Store inventory item in database"""
-        if not self.db:
-            return
-        
-        logger.debug(f"Storing inventory item for {device_id}")
-    
-    def _store_revenue_record(self, record: Dict) -> None:
-        """Store revenue record in database"""
-        if not self.db:
-            return
-        
-        logger.debug(f"Storing revenue record")
+        self.last_sync_time: Dict = {}
+
+    def sync_all(self, force: bool = False) -> Dict:
+        return {"status": "ok", "message": "Real API — no sync needed"}
 
 
-class HAHAWebhookHandler:
-    """
-    Handles webhooks from HAHA for real-time updates
-    """
-    
-    def __init__(self, db_client=None):
-        """
-        Initialize webhook handler
-        
-        Args:
-            db_client: Database client for storing webhook data
-        """
-        self.db = db_client
-        self.handlers = {}
-    
-    def register_handler(self, event_type: str, handler_func):
-        """Register a handler for a specific event type"""
-        self.handlers[event_type] = handler_func
-        logger.info(f"Registered handler for event type: {event_type}")
-    
-    def handle_webhook(self, event_type: str, data: Dict) -> bool:
-        """
-        Handle incoming webhook
-        
-        Args:
-            event_type: Type of event
-            data: Event data
-            
-        Returns:
-            True if handled successfully
-        """
-        try:
-            if event_type in self.handlers:
-                self.handlers[event_type](data)
-                logger.info(f"Handled webhook event: {event_type}")
-                return True
-            
-            logger.warning(f"No handler for event type: {event_type}")
-            return False
-        
-        except Exception as e:
-            logger.error(f"Error handling webhook: {str(e)}")
-            return False
-    
-    def on_transaction(self, data: Dict) -> None:
-        """Handle transaction event"""
-        logger.info(f"Transaction event: {data}")
-    
-    def on_inventory_update(self, data: Dict) -> None:
-        """Handle inventory update event"""
-        logger.info(f"Inventory update: {data}")
-    
-    def on_machine_status_change(self, data: Dict) -> None:
-        """Handle machine status change event"""
-        logger.info(f"Machine status change: {data}")
-    
-    def on_error(self, data: Dict) -> None:
-        """Handle error event"""
-        logger.warning(f"Machine error: {data}")
-
-
-# Demo/Mock implementation for testing without real HAHA credentials
-class HAHAVendingAPIMock(HAHAVendingAPI):
-    """Mock HAHA API for testing and demonstration"""
-    
-    def __init__(self, merchant_id: str = "demo_merchant"):
-        """Initialize mock API"""
-        self.merchant_id = merchant_id
-        self.api_key = "demo_key"
-        self.base_url = "https://api.hahavending.com"
-        self.cache = {}
-        self.cache_ttl = 300
-        self.last_sync = {}
-        
-        # Mock data
-        self.mock_machines = [
-            {
-                'device_id': 'HAHA-001',
-                'machine_id': 'MX-001',
-                'location': 'Downtown Mall',
-                'status': 'online',
-                'temperature': 4.2,
-                'last_transaction': datetime.utcnow().isoformat(),
-                'total_revenue': 1250.50,
-                'units_sold': 245
-            },
-            {
-                'device_id': 'HAHA-002',
-                'machine_id': 'MX-002',
-                'location': 'Airport Terminal',
-                'status': 'online',
-                'temperature': 3.8,
-                'last_transaction': datetime.utcnow().isoformat(),
-                'total_revenue': 2100.75,
-                'units_sold': 412
-            }
-        ]
-    
-    def authenticate(self) -> bool:
-        """Mock authentication"""
-        logger.info("Mock: Authenticated successfully")
-        return True
-    
-    def get_machines(self, force_refresh: bool = False) -> List[Dict]:
-        """Return mock machines"""
-        return self.mock_machines
-    
-    def get_machine_status(self, device_id: str) -> Dict:
-        """Return mock machine status"""
-        return {
-            'device_id': device_id,
-            'status': 'online',
-            'temperature': 4.0,
-            'battery': 95,
-            'signal_strength': -45
-        }
-    
-    def get_machine_inventory(self, device_id: str) -> List[Dict]:
-        """Return mock inventory"""
-        return [
-            {'slot': 'A1', 'product': 'Coca-Cola', 'quantity': 45, 'capacity': 50},
-            {'slot': 'A2', 'product': 'Sprite', 'quantity': 12, 'capacity': 50},
-            {'slot': 'B1', 'product': 'Water', 'quantity': 38, 'capacity': 50},
-            {'slot': 'B2', 'product': 'Juice', 'quantity': 5, 'capacity': 50}
-        ]
-    
-    def get_machine_revenue(self, device_id: str,
-                           start_date: Optional[str] = None,
-                           end_date: Optional[str] = None) -> List[Dict]:
-        """Return mock revenue data"""
-        revenue = []
-        for i in range(30):
-            date = (datetime.utcnow() - timedelta(days=i)).strftime('%Y-%m-%d')
-            revenue.append({
-                'date': date,
-                'device_id': device_id,
-                'units_sold': 8 + (i % 5),
-                'total_revenue': 40.00 + (i * 2.5),
-                'average_transaction': 5.00
-            })
-        return revenue
-    
-    def get_all_revenue(self, start_date: Optional[str] = None,
-                       end_date: Optional[str] = None) -> List[Dict]:
-        """Return mock aggregated revenue"""
-        revenue = []
-        for i in range(30):
-            date = (datetime.utcnow() - timedelta(days=i)).strftime('%Y-%m-%d')
-            revenue.append({
-                'date': date,
-                'total_revenue': 150.00 + (i * 5),
-                'units_sold': 30 + (i * 2),
-                'machine_count': 2
-            })
-        return revenue
-
-
-# Export main classes
 __all__ = [
-    'HAHAVendingAPI',
-    'HAHADataSyncManager',
-    'HAHAWebhookHandler',
-    'HAHAVendingAPIMock'
+    "HAHAVendingAPI",
+    "HAHAVendingAPIMock",
+    "HAHADataSyncManager",
 ]

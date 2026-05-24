@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import jwt as pyjwt
 from functools import wraps
-from haha_integration import HAHAVendingAPIMock, HAHADataSyncManager
+from haha_integration import HAHAVendingAPI, HAHAVendingAPIMock, HAHADataSyncManager
 
 app = Flask(__name__)
 CORS(app)
@@ -24,7 +24,22 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'snaxology-secret-key-20
 
 db = SQLAlchemy(app)
 
-haha_api = HAHAVendingAPIMock(merchant_id="snaxology_demo")
+# ---- Real HAHA API (falls back to mock if credentials are missing) ----
+_haha_appkey = os.environ.get('HAHA_API_KEY', '')
+_haha_appsecret = os.environ.get('HAHA_API_SECRET', '')
+_haha_base_url = os.environ.get('HAHA_API_BASE_URL', 'https://thorapi.hahabianli.com')
+
+if _haha_appkey and _haha_appsecret:
+    haha_api = HAHAVendingAPI(
+        appkey=_haha_appkey,
+        appsecret=_haha_appsecret,
+        base_url=_haha_base_url
+    )
+    _haha_mode = 'real'
+else:
+    haha_api = HAHAVendingAPIMock(merchant_id='snaxology_demo')
+    _haha_mode = 'mock'
+
 haha_sync = HAHADataSyncManager(haha_api)
 
 # ============================================================================
@@ -340,34 +355,86 @@ def update_profile(current_user):
 @app.route('/api/dashboard/overview', methods=['GET'])
 @token_required
 def dashboard_overview(current_user):
+    # Machine count from DB
     machines = Machine.query.filter_by(user_id=current_user.id).all()
     online_count = sum(1 for m in machines if m.status == 'online')
-    thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
-    revenue_records = Revenue.query.filter(Revenue.user_id == current_user.id, Revenue.date >= thirty_days_ago).all()
-    total_revenue = sum(r.total_revenue for r in revenue_records)
-    low_stock = Inventory.query.filter(Inventory.user_id == current_user.id,
-        Inventory.quantity <= Inventory.low_stock_threshold).count()
-    open_tickets = SupportTicket.query.filter_by(user_id=current_user.id, status='open').count()
-    return jsonify({'total_machines': len(machines), 'online_machines': online_count,
-                    'revenue_30_days': round(total_revenue, 2), 'low_stock_alerts': low_stock,
-                    'open_tickets': open_tickets, 'recent_activities': []}), 200
+
+    # Revenue from real HAHA API (30-day paid orders)
+    try:
+        rev_summary = haha_api.get_revenue_summary(days=30)
+        total_revenue = rev_summary.get('total_revenue', 0.0)
+        haha_order_count = rev_summary.get('order_count', 0)
+    except Exception:
+        thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
+        revenue_records = Revenue.query.filter(
+            Revenue.user_id == current_user.id,
+            Revenue.date >= thirty_days_ago
+        ).all()
+        total_revenue = sum(r.total_revenue for r in revenue_records)
+        haha_order_count = 0
+
+    low_stock = Inventory.query.filter(
+        Inventory.user_id == current_user.id,
+        Inventory.quantity <= Inventory.low_stock_threshold
+    ).count()
+    open_tickets = SupportTicket.query.filter_by(
+        user_id=current_user.id, status='open'
+    ).count()
+
+    # Build recent activities from latest HAHA orders
+    recent_activities = []
+    try:
+        recent_orders = haha_api.get_recent_orders(limit=10)
+        for order in recent_orders:
+            if order.get('status') == 101:
+                recent_activities.append({
+                    'type': 'sale',
+                    'machine': order.get('device_name', order.get('sticker_num', '')),
+                    'description': order.get('commodity_desc', 'Sale'),
+                    'amount': order.get('actual_payment_amount', '0.00'),
+                    'time': order.get('pay_time') or order.get('create_time', '')
+                })
+    except Exception:
+        pass
+
+    return jsonify({
+        'total_machines': len(machines),
+        'online_machines': online_count,
+        'revenue_30_days': round(total_revenue, 2),
+        'low_stock_alerts': low_stock,
+        'open_tickets': open_tickets,
+        'haha_order_count': haha_order_count,
+        'recent_activities': recent_activities[:5]
+    }), 200
 
 
 @app.route('/api/dashboard/revenue-summary', methods=['GET'])
 @token_required
 def dashboard_revenue_summary(current_user):
-    thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
-    revenue_records = Revenue.query.filter(
-        Revenue.user_id == current_user.id,
-        Revenue.date >= thirty_days_ago
-    ).order_by(Revenue.date).all()
-    daily = {}
-    for r in revenue_records:
-        d = r.date.isoformat() if hasattr(r.date, 'isoformat') else str(r.date)
-        daily[d] = daily.get(d, 0) + r.total_revenue
-    daily_revenue = [{'date': k, 'revenue': round(v, 2)} for k, v in sorted(daily.items())]
-    total = round(sum(r.total_revenue for r in revenue_records), 2)
-    return jsonify({'daily_revenue': daily_revenue, 'total_revenue': total}), 200
+    try:
+        rev_summary = haha_api.get_revenue_summary(days=30)
+        daily_revenue = rev_summary.get('daily_revenue', [])
+        total = rev_summary.get('total_revenue', 0.0)
+        by_machine = rev_summary.get('by_machine', [])
+    except Exception:
+        # Fallback to DB
+        thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
+        revenue_records = Revenue.query.filter(
+            Revenue.user_id == current_user.id,
+            Revenue.date >= thirty_days_ago
+        ).order_by(Revenue.date).all()
+        daily: dict = {}
+        for r in revenue_records:
+            d = r.date.isoformat() if hasattr(r.date, 'isoformat') else str(r.date)
+            daily[d] = daily.get(d, 0) + r.total_revenue
+        daily_revenue = [{'date': k, 'revenue': round(v, 2)} for k, v in sorted(daily.items())]
+        total = round(sum(r.total_revenue for r in revenue_records), 2)
+        by_machine = []
+    return jsonify({
+        'daily_revenue': daily_revenue,
+        'total_revenue': total,
+        'by_machine': by_machine
+    }), 200
 
 
 @app.route('/api/dashboard/machine-status', methods=['GET'])
@@ -558,9 +625,12 @@ def update_ticket(current_user, ticket_id):
 def haha_status():
     try:
         is_connected = haha_api.authenticate()
-        return jsonify({'status': 'connected' if is_connected else 'disconnected',
-                        'merchant_id': haha_api.merchant_id, 'last_sync': haha_sync.last_sync_time,
-                        'api_type': 'mock'}), 200
+        return jsonify({
+            'status': 'connected' if is_connected else 'disconnected',
+            'api_type': _haha_mode,
+            'base_url': _haha_base_url,
+            'last_sync': haha_sync.last_sync_time
+        }), 200
     except Exception as e:
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
@@ -568,8 +638,41 @@ def haha_status():
 @app.route('/api/haha/machines', methods=['GET'])
 def haha_get_machines():
     try:
-        machines = haha_api.get_machines()
+        machines = haha_api.get_machines_from_orders(days=30)
         return jsonify({'status': 'success', 'count': len(machines), 'machines': machines}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/haha/orders', methods=['GET'])
+def haha_get_orders():
+    """Return recent orders from the real HAHA API."""
+    try:
+        limit = min(int(request.args.get('limit', 20)), 100)
+        page = int(request.args.get('page', 1))
+        data = haha_api.get_orders(page=page, limit=limit)
+        return jsonify({'status': 'success', **data}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/haha/revenue', methods=['GET'])
+def haha_get_revenue():
+    """Return revenue summary from the real HAHA API."""
+    try:
+        days = int(request.args.get('days', 30))
+        summary = haha_api.get_revenue_summary(days=days)
+        return jsonify({'status': 'success', **summary}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
+@app.route('/api/haha/cache/clear', methods=['POST'])
+def haha_clear_cache():
+    """Force-clear the HAHA API response cache."""
+    try:
+        haha_api.clear_cache()
+        return jsonify({'status': 'success', 'message': 'Cache cleared'}), 200
     except Exception as e:
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
