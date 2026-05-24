@@ -23,6 +23,10 @@ import requests
 import json
 import os
 import time
+import hmac
+import hashlib
+import random
+import string
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -100,16 +104,62 @@ class HAHAVendingAPI:
         return self._acquire_token()
 
     # ------------------------------------------------------------------
+    # Signature generation
+    # ------------------------------------------------------------------
+
+    def _generate_signature(self, params: Dict, header_params: Dict) -> str:
+        """
+        Generate HMAC-SHA256 signature.
+        Merges request params + header params (nonce, timestamp, appkey),
+        sorts alphabetically, builds query string, signs with appsecret.
+        """
+        all_params = {}
+        for k, v in {**params, **header_params}.items():
+            all_params[k] = str(v).strip() if isinstance(v, str) else str(v)
+        sorted_items = sorted(all_params.items())
+        query_string = "&".join(f"{k}={v}" for k, v in sorted_items)
+        sig = hmac.new(
+            self.appsecret.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+        return sig
+
+    def _build_signed_headers(self, params: Dict) -> Dict:
+        """Build the Authorization + signature headers for a signed request."""
+        token = self._get_token()
+        if not token:
+            return {}
+        nonce = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        timestamp = str(int(time.time()))
+        header_params = {
+            "nonce": nonce,
+            "timestamp": timestamp,
+            "appkey": self.appkey,
+        }
+        signature = self._generate_signature(params, header_params)
+        return {
+            "Authorization": token,
+            "nonce": nonce,
+            "timestamp": timestamp,
+            "signature": signature,
+            "appkey": self.appkey,
+        }
+
+    # ------------------------------------------------------------------
     # Low-level request helper
     # ------------------------------------------------------------------
 
     def _get(self, path: str, params: Optional[Dict] = None) -> Optional[Dict]:
         """
-        Perform an authenticated GET request.
+        Perform an authenticated GET request with HMAC-SHA256 signature.
         Returns the parsed JSON body, or None on failure.
         """
-        token = self._get_token()
-        if not token:
+        if params is None:
+            params = {}
+
+        headers = self._build_signed_headers(params)
+        if not headers:
             logger.error("HAHA API: no valid token available")
             return None
 
@@ -118,15 +168,15 @@ class HAHAVendingAPI:
             resp = self.session.get(
                 url,
                 params=params,
-                headers={"Authorization": token},
+                headers=headers,
                 timeout=20
             )
             resp.raise_for_status()
             body = resp.json()
             if body.get("success") == "true":
                 return body
-            logger.warning("HAHA API: non-success response for %s: code=%s",
-                           path, body.get("code"))
+            logger.warning("HAHA API: non-success response for %s: code=%s msg=%s",
+                           path, body.get("code"), body.get("message"))
             return None
         except requests.exceptions.Timeout:
             logger.error("HAHA API: timeout on %s", path)
