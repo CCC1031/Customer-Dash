@@ -103,6 +103,11 @@ class ApiClient {
     return response.data
   }
 
+  async getHahaMachines() {
+    const response = await this.client.get('/haha/machines')
+    return response.data
+  }
+
   async getMachine(id: number) {
     const response = await this.client.get(`/machines/${id}`)
     return response.data
